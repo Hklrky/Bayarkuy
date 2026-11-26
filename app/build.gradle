@@ -1,5 +1,12 @@
 apply plugin: 'com.android.application'
 
+// Signing properties dibuat otomatis oleh GitHub Actions pada build pertama.
+def signingPropertiesFile = rootProject.file('keystore/signing.properties')
+def signingProperties = new Properties()
+if (signingPropertiesFile.exists()) {
+    signingPropertiesFile.withInputStream { signingProperties.load(it) }
+}
+
 android {
     compileSdkVersion 30
     buildToolsVersion "30.0.3"
@@ -12,9 +19,23 @@ android {
         versionName "1.0.0"
     }
 
+    signingConfigs {
+        release {
+            if (signingPropertiesFile.exists()) {
+                storeFile rootProject.file(signingProperties['storeFile'])
+                storePassword signingProperties['storePassword']
+                keyAlias signingProperties['keyAlias']
+                keyPassword signingProperties['keyPassword']
+            }
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
+            if (signingPropertiesFile.exists()) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 
