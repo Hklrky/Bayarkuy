@@ -1,11 +1,10 @@
-
 name: GitHub APK Maker - BayarKuy
 
 on:
   push:
-    branches: [main, master]
-  pull_request:
-    branches: [main, master]
+    branches:
+      - main
+      - master
   workflow_dispatch:
 
 permissions:
@@ -15,54 +14,136 @@ jobs:
   build:
     name: Build BayarKuy Android APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
+
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      # Android SDK Command-line Tools terbaru membutuhkan JDK 17.
       - name: Setup Java 17 for Android SDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      # Gunakan SDK yang sudah tersedia pada GitHub-hosted Ubuntu runner.
+      # Tidak memakai setup-android action agar tidak mencoba paket usang "tools".
+      - name: Locate Android SDK tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$ANDROID_HOME"
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager 2>/dev/null | sort -V | tail -n 1)"
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager tidak ditemukan di $ANDROID_HOME/cmdline-tools" >&2
+            exit 1
+          fi
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          echo "Menggunakan: $SDKMANAGER"
 
       - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses || true
+        shell: bash
+        run: yes | "$SDKMANAGER" --licenses >/dev/null || true
 
       - name: Install Android SDK components
         run: |
-          sdkmanager \
+          "$SDKMANAGER" --install \
             "platform-tools" \
             "platforms;android-30" \
             "build-tools;30.0.3"
 
-      - name: Setup Java 11 for Gradle
+      # Keystore dibuat otomatis satu kali lalu disimpan di GitHub Actions cache.
+      # Jangan menghapus cache ini jika ingin mempertahankan tanda tangan aplikasi.
+      - name: Restore persistent BayarKuy signing keystore
+        id: signing-cache
+        uses: actions/cache@v4
+        with:
+          path: keystore/
+          key: bayarkuy-release-keystore-v1
+
+      - name: Generate signing keystore automatically (first build only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p keystore
+          chmod 700 keystore
+
+          if [ ! -s keystore/bayarkuy-release.jks ] || [ ! -s keystore/signing.properties ]; then
+            echo "Keystore belum ada. Membuat keystore BayarKuy..."
+            STORE_PASSWORD="$(openssl rand -hex 32)"
+            KEY_PASSWORD="$STORE_PASSWORD"
+
+            keytool -genkeypair -noprompt \
+              -keystore keystore/bayarkuy-release.jks \
+              -storetype JKS \
+              -storepass "$STORE_PASSWORD" \
+              -keypass "$KEY_PASSWORD" \
+              -alias bayarkuy \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=BayarKuy, OU=Android, O=BayarKuy, L=Indonesia, ST=Indonesia, C=ID"
+
+            cat > keystore/signing.properties <<EOF
+          storeFile=keystore/bayarkuy-release.jks
+          storePassword=$STORE_PASSWORD
+          keyAlias=bayarkuy
+          keyPassword=$KEY_PASSWORD
+          EOF
+            chmod 600 keystore/bayarkuy-release.jks keystore/signing.properties
+            echo "Keystore BayarKuy berhasil dibuat. Password tidak ditampilkan di log."
+          else
+            echo "Keystore BayarKuy ditemukan; memakai kunci yang sama."
+          fi
+
+          keytool -list -keystore keystore/bayarkuy-release.jks \
+            -storepass "$(sed -n 's/^storePassword=//p' keystore/signing.properties)" \
+            -alias bayarkuy >/dev/null
+
+      # AGP 7.0.4 + Gradle 7.2 dijalankan dengan JDK 11.
+      - name: Setup Java 11 for Gradle build
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '11'
 
       - name: Install Gradle 7.2
+        shell: bash
         run: |
           curl -fL https://services.gradle.org/distributions/gradle-7.2-bin.zip -o /tmp/gradle-7.2-bin.zip
           unzip -q /tmp/gradle-7.2-bin.zip -d "$HOME"
           echo "$HOME/gradle-7.2/bin" >> "$GITHUB_PATH"
 
-      - name: Verify project
+      - name: Verify project and toolchain
         run: |
           test -f settings.gradle
           test -f build.gradle
           test -f app/build.gradle
           test -f app/src/main/AndroidManifest.xml
+          test -s keystore/bayarkuy-release.jks
           java -version
           gradle --version
+          "$ANDROID_HOME/platform-tools/adb" version
 
-      - name: Build Debug and Release APK
+      - name: Build Debug and signed Release APK
         run: gradle --no-daemon --stacktrace clean assembleDebug assembleRelease
+
+      - name: Verify signed Release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find app/build/outputs/apk/release -type f -name '*.apk' | head -n 1)"
+          test -n "$APK"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -n "$APKSIGNER"
+          "$APKSIGNER" verify --verbose "$APK"
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
