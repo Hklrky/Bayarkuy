@@ -3,13 +3,9 @@ name: GitHub APK Maker - BayarKuy
 
 on:
   push:
-    branches:
-      - main
-      - master
+    branches: [main, master]
   pull_request:
-    branches:
-      - main
-      - master
+    branches: [main, master]
   workflow_dispatch:
 
 permissions:
@@ -25,7 +21,6 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      # JDK 17 untuk Android SDK Command-line Tools
       - name: Setup Java 17 for Android SDK
         uses: actions/setup-java@v4
         with:
@@ -36,7 +31,7 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses
+        run: yes | sdkmanager --licenses || true
 
       - name: Install Android SDK components
         run: |
@@ -45,8 +40,7 @@ jobs:
             "platforms;android-30" \
             "build-tools;30.0.3"
 
-      # JDK 11 untuk Gradle dan AGP 7.0.4
-      - name: Setup Java 11 for Gradle build
+      - name: Setup Java 11 for Gradle
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -68,8 +62,7 @@ jobs:
           gradle --version
 
       - name: Build Debug and Release APK
-        run: |
-          gradle --no-daemon --stacktrace clean assembleDebug assembleRelease
+        run: gradle --no-daemon --stacktrace clean assembleDebug assembleRelease
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
