@@ -50,15 +50,54 @@ jobs:
           gradle --version
           sdkmanager --list_installed
 
-      - name: Build Debug and Release APK
-        run: gradle --no-daemon --stacktrace assembleDebug assembleRelease
 
-      - name: Upload APK files
+name: Build Android APK
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build BayarKuy APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      # Java 17 diperlukan oleh Android SDK tools terbaru
+      - name: Setup Java 17 for Android SDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # Kembalikan Java 11 untuk kompatibilitas Gradle 7.2
+      - name: Setup Java 11 for Gradle
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '7.2'
+
+      - name: Build Debug APK
+        run: gradle assembleDebug
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: BayarKuy-Notifier-APK
-          path: |
-            app/build/outputs/apk/debug/*.apk
-            app/build/outputs/apk/release/*.apk
+          path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 30
